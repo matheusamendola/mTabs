@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QAction, QDialog, QFormLayout, QLineEdit, QComboBox, QPushButton, QMessageBox, QLabel, QSizePolicy
+from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QAction, QDialog, QFormLayout, QLineEdit, QComboBox, QPushButton, QMessageBox, QLabel, QSizePolicy, QTabBar, QMenu, QToolButton, QTabWidget, QHBoxLayout, QCheckBox, QColorDialog, QGridLayout
 from PyQt5.QtCore import Qt
 from PyQt5.QAxContainer import QAxWidget
 import sys
@@ -185,6 +185,44 @@ class RDPWidget(QWidget):
         """
         print(f"Exceção QAxWidget: code={code}, source={source}, desc={desc}, help={help}")
 
+    def reconnect_rdp(self):
+        """
+        Reconecta a sessão RDP destruindo o QAxWidget antigo e criando um novo,
+        garantindo que a tela branca não ocorra após reconexão.
+        Não recebe parâmetros e não retorna nada.
+        """
+        layout = self.layout()
+        if self.rdp:
+            layout.removeWidget(self.rdp)
+            self.rdp.deleteLater()
+            self.rdp = None
+        # Cria novo QAxWidget
+        self.rdp = QAxWidget('MsTscAx.MsTscAx.7')
+        self.rdp.exception.connect(self.handle_ax_exception)
+        self.rdp.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.rdp.setStyleSheet("border: none; background: transparent;")
+        layout.addWidget(self.rdp)
+        layout.setAlignment(self.rdp, Qt.AlignTop | Qt.AlignLeft)
+        width = self.width() if self.width() > 0 else 900
+        height = self.height() if self.height() > 0 else 600
+        self.rdp.resize(width, height)
+        self.rdp.setProperty('Server', self._rdp_config['host'])
+        self.rdp.setProperty('UserName', self._rdp_config['username'])
+        if self._rdp_config['domain']:
+            self.rdp.setProperty('Domain', self._rdp_config['domain'])
+        self.rdp.setProperty('DesktopWidth', width)
+        self.rdp.setProperty('DesktopHeight', height)
+        adv = self.rdp.querySubObject("AdvancedSettings")
+        if adv:
+            adv.setProperty("ClearTextPassword", self._rdp_config['password'])
+            adv.setProperty("AuthenticationLevel", 2 if self._rdp_config['nla'] else 0)
+            if self._rdp_config['port'] != 3389:
+                adv.setProperty("RDPPort", self._rdp_config['port'])
+            adv.setProperty("DisplayConnectionBar", True)
+            adv.setProperty("DesktopWidth", width)
+            adv.setProperty("DesktopHeight", height)
+        self.rdp.dynamicCall('Connect()')
+
 class ConnectionDialog(QDialog):
     """
     Diálogo para entrada dos dados de conexão RDP.
@@ -280,6 +318,83 @@ class ConnectionDialog(QDialog):
         nla = self.nla_combo.currentIndex() == 0
         return (host, username, password, domain, port, nla)
 
+class ClosableTabBar(QTabBar):
+    """
+    QTabBar customizado que permite fechar abas com o botão direito do mouse.
+    """
+    def mousePressEvent(self, event):
+        """
+        Evento chamado ao pressionar o mouse sobre a barra de abas.
+        Permite o comportamento padrão do QTabBar, sem fechar ou mover abas com o botão direito.
+        Parâmetros:
+            event (QMouseEvent): evento do mouse.
+        Não retorna nada.
+        """
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """
+        Evento chamado ao soltar o mouse sobre a barra de abas.
+        Se for botão do meio, fecha a aba. Se for botão direito, exibe menu de contexto com opções de reconectar e fechar aba.
+        Parâmetros:
+            event (QMouseEvent): evento do mouse.
+        Não retorna nada.
+        """
+        if event.button() == Qt.MiddleButton:
+            index = self.tabAt(event.pos())
+            if index != -1:
+                self.parent().tabCloseRequested.emit(index)
+        elif event.button() == Qt.RightButton:
+            index = self.tabAt(event.pos())
+            if index != -1:
+                menu = QMenu(self)
+                def close_tab():
+                    """
+                    Fecha a aba selecionada.
+                    Não recebe parâmetros e não retorna nada.
+                    """
+                    self.parent().tabCloseRequested.emit(index)
+                def reconnect_tab():
+                    """
+                    Reconecta a sessão RDP da aba selecionada, aguardando o evento de desconexão para reconectar.
+                    Não recebe parâmetros e não retorna nada.
+                    """
+                    widget = self.parent().widget(index)
+                    if hasattr(widget, 'rdp'):
+                        rdp = widget.rdp
+                        def do_reconnect():
+                            width = rdp.width()
+                            height = rdp.height()
+                            rdp.setProperty('DesktopWidth', width)
+                            rdp.setProperty('DesktopHeight', height)
+                            adv = rdp.querySubObject("AdvancedSettings")
+                            if adv:
+                                adv.setProperty("DesktopWidth", width)
+                                adv.setProperty("DesktopHeight", height)
+                            rdp.dynamicCall('Connect()')
+                            rdp.repaint()
+                            rdp.update()
+                            widget.repaint()
+                            widget.update()
+                            try:
+                                rdp.OnDisconnected.disconnect(do_reconnect)
+                            except Exception:
+                                pass
+                        if rdp.property('Connected') == 1:
+                            try:
+                                rdp.OnDisconnected.disconnect(do_reconnect)
+                            except Exception:
+                                pass
+                            rdp.OnDisconnected.connect(do_reconnect)
+                            rdp.dynamicCall('Disconnect()')
+                        else:
+                            do_reconnect()
+                menu.addAction('Reconectar', reconnect_tab)
+                menu.addAction('Fechar aba', close_tab)
+                menu.exec_(event.globalPos())
+        else:
+            super().mouseReleaseEvent(event)
+
 class MTabsMainWindow(QMainWindow):
     """
     Janela principal do aplicativo, gerencia as abas de conexões RDP.
@@ -294,6 +409,7 @@ class MTabsMainWindow(QMainWindow):
         self.setWindowTitle('mTabs (Qt) - Gerenciador de Conexões RDP')
         self.resize(900, 600)
         self.tab_widget = QTabWidget()
+        self.tab_widget.setTabBar(ClosableTabBar(self.tab_widget))
         self.tab_widget.setTabsClosable(True)
         self.tab_widget.setStyleSheet("""
             QTabBar::tab {
@@ -317,6 +433,25 @@ class MTabsMainWindow(QMainWindow):
         Não recebe parâmetros e não retorna nada.
         """
         menubar = self.menuBar()
+        menubar.setStyleSheet("""
+            QMenuBar { background: #f0f0f0; }
+            QMenuBar::item { background: transparent; color: #222; }
+            QMenuBar::item:selected { background: #b3d7f3; color: #111; border: 0.5px solid #0078d7; }
+            QMenu {
+                background: #f5f5f5;
+                color: #222;
+                border: 1px solid #aaa;
+            }
+            QMenu::item {
+                background: transparent;
+                color: #222;
+            }
+            QMenu::item:selected {
+                background: #b3d7f3;
+                color: #111;
+                border: 0.5px solid #0078d7;
+            }
+        """)
         conex_menu = menubar.addMenu('Conexão')
         add_action = QAction('Adicionar conexão', self)
         add_action.triggered.connect(self.add_connection)
@@ -356,11 +491,15 @@ class MTabsMainWindow(QMainWindow):
             fav_data (dict): dados da conexão favorita.
         Não retorna nada.
         """
-        # Conecta diretamente sem mostrar atributos
-        self._add_tab(
+        computer_name = self._get_computer_name_from_host(fav_data['host'])
+        widget = RDPWidget(
             fav_data['host'], fav_data['username'], fav_data['password'],
             fav_data.get('domain', ''), fav_data.get('port', 3389), fav_data.get('nla', True)
         )
+        # Sempre adiciona a nova aba na última posição
+        self.tab_widget.addTab(widget, computer_name)
+        self.tab_widget.setCurrentWidget(widget)
+        self.setWindowTitle(f"{computer_name} - mTabs")
 
     def add_favorite(self, name, folder_path, conn_data):
         """
@@ -464,16 +603,22 @@ class MTabsMainWindow(QMainWindow):
 
     def _show_welcome(self):
         """
-        Exibe uma mensagem amigável na tela inicial.
+        Exibe o formulário de Nova Conexão como aba inicial.
         """
         if self.tab_widget.count() == 0:
-            welcome = QLabel("""
-                <div style='text-align:center; color:#2563eb; font-size:22px; font-weight:600; margin-top:40px;'>
-                Bem-vindo ao mTabs!<br><span style='color:#222;font-size:16px;font-weight:400;'>Clique em <b>Conexão → Adicionar conexão</b> para iniciar uma sessão RDP.</span>
-                </div>
-            """)
-            welcome.setAlignment(Qt.AlignCenter)
-            self.tab_widget.addTab(welcome, "Bem-vindo")
+            def on_connect(data):
+                host, username, password, domain, port, nla = data
+                if not host or not username:
+                    return
+                self._add_tab(host, username, password, domain, port, nla)
+                self.tab_widget.removeTab(0)  # Remove a aba de nova conexão
+            def on_favoritar(fav_data):
+                name, folder, conn_data = fav_data
+                if name:
+                    self.add_favorite(name, folder, conn_data)
+            nova_conexao = NovaConexaoWidget(on_connect=on_connect, on_favoritar=on_favoritar)
+            self.tab_widget.addTab(nova_conexao, "Nova Conexão")
+            self.tab_widget.setCurrentWidget(nova_conexao)
 
     def set_minimum_size_to_current(self):
         """
@@ -494,6 +639,147 @@ class MTabsMainWindow(QMainWindow):
                 # Ajusta resolução da sessão RDP
                 widget.rdp.setProperty('DesktopWidth', current_size.width())
                 widget.rdp.setProperty('DesktopHeight', current_size.height())
+
+class NovaConexaoWidget(QWidget):
+    """
+    Widget de formulário para criar uma nova conexão RDP, exibido dentro de uma aba, com layout moderno e apenas a aba Logon.
+    """
+    def __init__(self, parent=None, on_connect=None, on_favoritar=None, on_close_tab=None):
+        """
+        Inicializa o formulário de nova conexão.
+        Parâmetros:
+            parent: widget pai (opcional).
+            on_connect: função callback chamada ao clicar em OK.
+            on_favoritar: função callback chamada ao clicar em Favoritar.
+            on_close_tab: função callback chamada ao clicar em Fechar Aba.
+        Não retorna nada.
+        """
+        super().__init__(parent)
+        self.on_connect = on_connect
+        self.on_favoritar = on_favoritar
+        self.on_close_tab = on_close_tab
+        self.setStyleSheet("background: #ffffff;")
+        main_layout = QVBoxLayout(self)
+        main_layout.setAlignment(Qt.AlignCenter)
+        main_layout.setContentsMargins(32, 32, 32, 32)
+        # Formulário centralizado
+        form_widget = QWidget()
+        form_layout = QVBoxLayout(form_widget)
+        # Título e mensagem dentro do formulário
+        title = QLabel("Nova Conexão")
+        title.setStyleSheet("background: #d3d3d3; font-weight: bold; font-size: 18px; padding: 8px; border: none;")
+        title.setAlignment(Qt.AlignCenter)
+        form_layout.addWidget(title)
+        msg = QLabel("Esta aba ainda não está conectada a um computador remoto.")
+        msg.setAlignment(Qt.AlignCenter)
+        msg.setStyleSheet("margin: 18px 0 18px 0; color: #444;")
+        form_layout.addWidget(msg)
+        # Campos do formulário
+        fields_widget = QWidget()
+        fields_layout = QFormLayout(fields_widget)
+        fields_layout.setLabelAlignment(Qt.AlignRight)
+        fields_layout.setFormAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        nome_exibicao = QLineEdit()
+        nome_exibicao.setMinimumWidth(515)
+        nome_exibicao.setMaximumWidth(515)
+        fields_layout.addRow("Nome de Exibição:", nome_exibicao)
+        self.host_input = QLineEdit()
+        self.host_input.setMinimumWidth(515)
+        self.host_input.setMaximumWidth(515)
+        fields_layout.addRow("Computador:", self.host_input)
+        self.user_input = QLineEdit()
+        self.user_input.setMinimumWidth(515)
+        self.user_input.setMaximumWidth(515)
+        fields_layout.addRow("Usuário:", self.user_input)
+        self.pass_input = QLineEdit()
+        self.pass_input.setEchoMode(QLineEdit.Password)
+        self.pass_input.setMinimumWidth(515)
+        self.pass_input.setMaximumWidth(515)
+        fields_layout.addRow("Senha:", self.pass_input)
+        self.domain_input = QLineEdit()
+        self.domain_input.setMinimumWidth(515)
+        self.domain_input.setMaximumWidth(515)
+        fields_layout.addRow("Domínio:", self.domain_input)
+        self.port_input = QLineEdit()
+        self.port_input.setText('3389')
+        self.port_input.setMinimumWidth(515)
+        self.port_input.setMaximumWidth(515)
+        fields_layout.addRow("Porta RDP:", self.port_input)
+        self.nla_checkbox = QCheckBox("Habilitar Autenticação em Nível de Rede (NLA)")
+        self.nla_checkbox.setChecked(True)
+        fields_layout.addRow("", self.nla_checkbox)
+        form_layout.addWidget(fields_widget)
+        # Botões dentro do formulário
+        btns_widget = QWidget()
+        btns_layout = QHBoxLayout(btns_widget)
+        self.fav_btn = QPushButton("Salvar como favorito")
+        self.fav_btn.clicked.connect(self._on_fav_clicked)
+        btns_layout.addWidget(self.fav_btn)
+        btns_layout.addStretch(1)
+        self.connect_btn = QPushButton("Conectar")
+        self.connect_btn.clicked.connect(self._on_ok_clicked)
+        btns_layout.addWidget(self.connect_btn)
+        form_layout.addWidget(btns_widget)
+        main_layout.addWidget(form_widget, alignment=Qt.AlignCenter)
+
+    def _on_ok_clicked(self):
+        """
+        Chama o callback de conexão com os dados do formulário.
+        Não recebe parâmetros e não retorna nada.
+        """
+        if self.on_connect:
+            self.on_connect(self.get_data())
+
+    def _on_close_tab_clicked(self):
+        """
+        Chama o callback de fechar aba, se fornecido.
+        Não recebe parâmetros e não retorna nada.
+        """
+        if self.on_close_tab:
+            self.on_close_tab()
+
+    def _on_fav_clicked(self):
+        """
+        Chama o callback de favoritar com os dados do formulário.
+        Não recebe parâmetros e não retorna nada.
+        """
+        if self.on_favoritar:
+            self.on_favoritar(self.get_favorite_data())
+
+    def get_favorite_data(self):
+        """
+        Retorna os dados do favorito.
+        Retorna:
+            tuple: (name, folder, conn_data)
+        """
+        name = self.host_input.text().strip() or "Favorito"
+        folder = ""
+        host, username, password, domain, port, nla = self.get_data()
+        return (name, folder, {
+            'host': host,
+            'username': username,
+            'password': password,
+            'domain': domain,
+            'port': port,
+            'nla': nla
+        })
+
+    def get_data(self):
+        """
+        Retorna os dados inseridos pelo usuário.
+        Retorna:
+            tuple: (host, username, password, domain, port, nla)
+        """
+        host = self.host_input.text().strip()
+        username = self.user_input.text().strip()
+        password = self.pass_input.text()
+        domain = self.domain_input.text().strip()
+        try:
+            port = int(self.port_input.text())
+        except ValueError:
+            port = 3389
+        nla = self.nla_checkbox.isChecked()
+        return (host, username, password, domain, port, nla)
 
 def main():
     """
