@@ -113,6 +113,26 @@ class RDPWidget(QWidget):
             'nla': nla
         }
 
+    def set_log_callback(self, log_callback):
+        """
+        Define uma função de callback para registrar logs no painel principal.
+        Parâmetros:
+            log_callback (callable): função que recebe (msg, level).
+        Não retorna nada.
+        """
+        self._log_callback = log_callback
+
+    def _log(self, msg, level="INFO"):
+        """
+        Chama o callback de log, se definido.
+        Parâmetros:
+            msg (str): mensagem a ser exibida.
+            level (str): nível da mensagem (INFO, ERRO, etc).
+        Não retorna nada.
+        """
+        if hasattr(self, '_log_callback') and self._log_callback:
+            self._log_callback(msg, level)
+
     def showEvent(self, event):
         """
         Evento chamado quando o widget é exibido pela primeira vez.
@@ -121,26 +141,33 @@ class RDPWidget(QWidget):
             event (QShowEvent): evento de exibição.
         Não retorna nada.
         """
+        import time
         super().showEvent(event)
+        start = time.time()
+        self._log(f"Iniciando conexão com {self._rdp_config['host']}...", "INFO")
         width = self.rdp.width() if self.rdp.width() > 0 else 900
         height = self.rdp.height() if self.rdp.height() > 0 else 600
-        print(f"Resolução inicial do QAxWidget para o RDP (showEvent): {width}x{height}")
-        self.rdp.setProperty('Server', self._rdp_config['host'])
-        self.rdp.setProperty('UserName', self._rdp_config['username'])
-        if self._rdp_config['domain']:
-            self.rdp.setProperty('Domain', self._rdp_config['domain'])
-        self.rdp.setProperty('DesktopWidth', width)
-        self.rdp.setProperty('DesktopHeight', height)
-        adv = self.rdp.querySubObject("AdvancedSettings")
-        if adv:
-            adv.setProperty("ClearTextPassword", self._rdp_config['password'])
-            adv.setProperty("AuthenticationLevel", 2 if self._rdp_config['nla'] else 0)
-            if self._rdp_config['port'] != 3389:
-                adv.setProperty("RDPPort", self._rdp_config['port'])
-            adv.setProperty("DisplayConnectionBar", True)
-            adv.setProperty("DesktopWidth", width)
-            adv.setProperty("DesktopHeight", height)
-        self.rdp.dynamicCall('Connect()')
+        try:
+            self.rdp.setProperty('Server', self._rdp_config['host'])
+            self.rdp.setProperty('UserName', self._rdp_config['username'])
+            if self._rdp_config['domain']:
+                self.rdp.setProperty('Domain', self._rdp_config['domain'])
+            self.rdp.setProperty('DesktopWidth', width)
+            self.rdp.setProperty('DesktopHeight', height)
+            adv = self.rdp.querySubObject("AdvancedSettings")
+            if adv:
+                adv.setProperty("ClearTextPassword", self._rdp_config['password'])
+                adv.setProperty("AuthenticationLevel", 2 if self._rdp_config['nla'] else 0)
+                if self._rdp_config['port'] != 3389:
+                    adv.setProperty("RDPPort", self._rdp_config['port'])
+                adv.setProperty("DisplayConnectionBar", True)
+                adv.setProperty("DesktopWidth", width)
+                adv.setProperty("DesktopHeight", height)
+            self.rdp.dynamicCall('Connect()')
+            elapsed = time.time() - start
+            self._log(f"Conexão iniciada para {self._rdp_config['host']} (tempo: {elapsed:.2f}s)", "INFO")
+        except Exception as e:
+            self._log(f"Erro ao conectar em {self._rdp_config['host']}: {e}", "ERRO")
 
     def _ajustar_resolucao_e_conectar(self):
         """
@@ -183,6 +210,7 @@ class RDPWidget(QWidget):
             help (str): ajuda adicional.
         Não retorna nada.
         """
+        self._log(f"Exceção QAxWidget: code={code}, source={source}, desc={desc}, help={help}", "ERRO")
         print(f"Exceção QAxWidget: code={code}, source={source}, desc={desc}, help={help}")
 
     def reconnect_rdp(self):
