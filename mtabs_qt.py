@@ -411,6 +411,7 @@ class MTabsMainWindow(QMainWindow):
         self.tab_widget = QTabWidget()
         self.tab_widget.setTabBar(ClosableTabBar(self.tab_widget))
         self.tab_widget.setTabsClosable(True)
+        self.tab_widget.setMovable(True)  # Permite arrastar as abas
         self.tab_widget.setStyleSheet("""
             QTabBar::tab {
                 height: 20px;
@@ -424,8 +425,22 @@ class MTabsMainWindow(QMainWindow):
         self.favorites = load_favorites_encrypted()
         self._create_menu()
         self.tab_widget.tabCloseRequested.connect(self.close_tab)
+        self.tab_widget.currentChanged.connect(self._update_window_title)
         self._show_welcome()
         self.set_minimum_size_to_current()
+
+    def _update_window_title(self, index):
+        """
+        Atualiza o título da janela para refletir o nome da aba ativa.
+        Parâmetros:
+            index (int): índice da aba ativa.
+        Não retorna nada.
+        """
+        if index == -1:
+            self.setWindowTitle('mTabs')
+        else:
+            tab_text = self.tab_widget.tabText(index)
+            self.setWindowTitle(f"{tab_text} - mTabs")
 
     def _create_menu(self):
         """
@@ -459,11 +474,7 @@ class MTabsMainWindow(QMainWindow):
         # Menu de favoritos
         self.favorites_menu = menubar.addMenu('Favoritos')
         self._update_favorites_menu()
-        # Menu de debug
-        debug_menu = menubar.addMenu('Debug')
-        resize_action = QAction('Testar redimensionamento RDP (tamanho atual da janela)', self)
-        resize_action.triggered.connect(self.test_resize_rdp_to_window)
-        debug_menu.addAction(resize_action)
+        # Menu de debug removido
 
     def _update_favorites_menu(self):
         """
@@ -521,23 +532,6 @@ class MTabsMainWindow(QMainWindow):
         self._update_favorites_menu()
         save_favorites_encrypted(self.favorites)
 
-    def test_resize_rdp_to_window(self):
-        """
-        Testa o redimensionamento do widget RDP ativo para o tamanho atual da janela principal.
-        Não recebe parâmetros e não retorna nada.
-        """
-        current_size = self.size()
-        widget = self.tab_widget.currentWidget()
-        if widget and hasattr(widget, 'rdp'):
-            widget.setMinimumSize(current_size)
-            widget.setMaximumSize(current_size)
-            widget.resize(current_size)
-            widget.rdp.setMinimumSize(current_size)
-            widget.rdp.setMaximumSize(current_size)
-            widget.rdp.resize(current_size)
-            if hasattr(widget, '_set_rdp_resolution'):
-                widget._set_rdp_resolution(current_size.width(), current_size.height())
-
     def add_connection(self):
         """
         Abre uma nova aba com o formulário de nova conexão RDP (NovaConexaoWidget).
@@ -592,19 +586,16 @@ class MTabsMainWindow(QMainWindow):
         self.tab_widget.setCurrentWidget(widget)
         self.setWindowTitle(f"{computer_name} - mTabs")
 
-    def _get_computer_name_from_host(self, host):
+    def _get_computer_name_from_host(self, host, timeout=2.0):
         """
-        Obtém o nome do computador remoto a partir do endereço IP ou hostname.
+        Retorna o próprio host informado, sem tentar resolver DNS.
         Parâmetros:
             host (str): endereço do host remoto (IP ou hostname).
+            timeout (float): ignorado, mantido para compatibilidade.
         Retorna:
-            str: nome do computador remoto, ou o próprio host se não for possível resolver.
+            str: o próprio host informado.
         """
-        import socket
-        try:
-            return socket.gethostbyaddr(host)[0]
-        except Exception:
-            return host
+        return host
 
     def close_tab(self, index):
         """
