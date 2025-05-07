@@ -540,23 +540,38 @@ class MTabsMainWindow(QMainWindow):
 
     def add_connection(self):
         """
-        Abre diálogo para adicionar uma nova conexão RDP.
+        Abre uma nova aba com o formulário de nova conexão RDP (NovaConexaoWidget).
         Não recebe parâmetros e não retorna nada.
         """
-        dialog = ConnectionDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
-            host, username, password, domain, port, nla = dialog.get_data()
-            if not host or not username:
-                return
-            try:
-                self._add_tab(host, username, password, domain, port, nla)
-                # Verifica se o usuário clicou em Favoritar
-                fav_data = dialog.get_favorite_data()
-                if fav_data:
-                    name, folder, conn_data = fav_data
-                    self.add_favorite(name, folder, conn_data)
-            except Exception as e:
-                QMessageBox.critical(self, 'Erro', f'Não foi possível abrir a conexão RDP: {e}')
+        nova_conexao = NovaConexaoWidget(on_connect=self._on_nova_conexao_connect, on_favoritar=self._on_nova_conexao_favoritar)
+        self.tab_widget.addTab(nova_conexao, "Nova Conexão")
+        self.tab_widget.setCurrentWidget(nova_conexao)
+
+    def _on_nova_conexao_connect(self, data):
+        """
+        Callback para conectar a partir do formulário de nova conexão.
+        Parâmetros:
+            data (tuple): dados da conexão (host, username, password, domain, port, nla).
+        Não retorna nada.
+        """
+        host, username, password, domain, port, nla = data
+        if not host or not username:
+            return
+        self._add_tab(host, username, password, domain, port, nla)
+        # Remove a aba de nova conexão após conectar
+        idx = self.tab_widget.currentIndex()
+        self.tab_widget.removeTab(idx)
+
+    def _on_nova_conexao_favoritar(self, fav_data):
+        """
+        Callback para favoritar a partir do formulário de nova conexão.
+        Parâmetros:
+            fav_data (tuple): (name, folder, conn_data)
+        Não retorna nada.
+        """
+        name, folder, conn_data = fav_data
+        if name:
+            self.add_favorite(name, folder, conn_data)
 
     def _add_tab(self, host, username, password, domain, port, nla):
         """
