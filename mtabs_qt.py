@@ -294,6 +294,15 @@ class MTabsMainWindow(QMainWindow):
         self.setWindowTitle('mTabs (Qt) - Gerenciador de Conexões RDP')
         self.resize(900, 600)
         self.tab_widget = QTabWidget()
+        self.tab_widget.setTabsClosable(True)
+        self.tab_widget.setStyleSheet("""
+            QTabBar::tab {
+                height: 20px;
+            }
+            QTabBar::tab:selected {
+                height: 27px;
+            }
+        """)
         self.setCentralWidget(self.tab_widget)
         generate_key()
         self.favorites = load_favorites_encrypted()
@@ -413,6 +422,7 @@ class MTabsMainWindow(QMainWindow):
     def _add_tab(self, host, username, password, domain, port, nla):
         """
         Adiciona uma nova aba com a conexão RDP embutida.
+        O nome da aba e o título da janela exibem o nome do computador remoto.
         Parâmetros:
             host (str): endereço do host remoto.
             username (str): nome de usuário.
@@ -422,9 +432,25 @@ class MTabsMainWindow(QMainWindow):
             nla (bool): True para NLA, False para Legacy.
         Não retorna nada.
         """
+        computer_name = self._get_computer_name_from_host(host)
         widget = RDPWidget(host, username, password, domain, port, nla)
-        self.tab_widget.addTab(widget, host)
+        self.tab_widget.addTab(widget, computer_name)
         self.tab_widget.setCurrentWidget(widget)
+        self.setWindowTitle(f"{computer_name} - mTabs")
+
+    def _get_computer_name_from_host(self, host):
+        """
+        Obtém o nome do computador remoto a partir do endereço IP ou hostname.
+        Parâmetros:
+            host (str): endereço do host remoto (IP ou hostname).
+        Retorna:
+            str: nome do computador remoto, ou o próprio host se não for possível resolver.
+        """
+        import socket
+        try:
+            return socket.gethostbyaddr(host)[0]
+        except Exception:
+            return host
 
     def close_tab(self, index):
         """
